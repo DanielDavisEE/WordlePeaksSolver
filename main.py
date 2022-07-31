@@ -99,32 +99,24 @@ class PeaksSolverBase:
         return re.compile(pattern)
 
     @staticmethod
-    def simulate_hints(self, guess, answer):
-        return self._simulate_hints(guess, answer)
-
-    @staticmethod
-    def _simulate_hints(guesses, answer):
-        from_sting = False
-        if type(guesses) is str:
-            guesses = [guesses]
-            from_sting = True
-        split_guesses = np.array(guesses).view('U1').reshape((len(guesses), -1))
+    def simulate_hints(guess, answer):
+        split_guess = np.array([guess]).view('U1').reshape((1, -1))
         split_answer = np.array([answer]).view('U1').reshape((1, -1))
 
-        hints = np.empty_like(split_guesses)
-        hints[split_guesses < split_answer] = BEFORE
-        hints[split_guesses == split_answer] = CORRECT
-        hints[split_guesses > split_answer] = AFTER
+        hints_temp = np.empty_like(split_guess)
+        hints_temp[split_guess < split_answer] = BEFORE
+        hints_temp[split_guess == split_answer] = CORRECT
+        hints_temp[split_guess > split_answer] = AFTER
 
-        hints_joined = hints.view('U5').reshape((-1))
-        if from_sting:
-            hints_joined = hints_joined[0]
-        return hints_joined
+        return hints_temp.view('U5').reshape((-1))
 
     def update_ranges(self, word=None, hints=None):
         if word is None:
             self.letter_ranges = [(0, 25)] * 5
         else:
+            # ranges = np.array(['a', 'z'] * 5).view('U1').reshape((5, 2))
+            # ranges[0, 0] = (ranges[0, 0].view('int') + 1).view('U1')
+
             hints = list(hints)
             letters = [ord(c) - ord('a') for c in word]
             for i in range(5):
@@ -173,24 +165,18 @@ class PeaksSolverMinTargets(PeaksSolverBase):
     """
 
     def create_word_matrix(self):
-        split_words = (pd.Series(self.all_words_list, index=self.all_words_list)
-                       .str.split('', expand=True)
-                       .iloc(axis=1)[1:6]
-                       .applymap(ord))
+        split_guesses = np.array(self.all_words_list).view('U1').reshape((len(self.all_words_list), -1))
 
         hints_dict = {}
-        hints_temp = pd.DataFrame().reindex_like(split_words)
-        hints_temp.loc[:, :] = ''
-        for i, word in enumerate(self.target_words_list):
-            before_letters = split_words < split_words.loc[word, :]
-            correct_letters = split_words == split_words.loc[word, :]
-            after_letters = split_words > split_words.loc[word, :]
+        for i, answer in enumerate(self.target_words_list):
+            split_answer = np.array([answer]).view('U1')
 
-            hints_temp.where(~before_letters, other=BEFORE, inplace=True)
-            hints_temp.where(~correct_letters, other=CORRECT, inplace=True)
-            hints_temp.where(~after_letters, other=AFTER, inplace=True)
+            hints_temp = np.empty_like(split_guesses)
+            hints_temp[split_guesses < split_answer] = BEFORE
+            hints_temp[split_guesses == split_answer] = CORRECT
+            hints_temp[split_guesses > split_answer] = AFTER
 
-            hints_dict[word] = hints_temp.values.sum(axis=1)
+            hints_dict[answer] = hints_temp.view('U5').reshape((-1))
 
             if re.fullmatch(r'0b10*', bin(i)):
                 print(f'Matrix column {i:>5}/{len(self.target_words_list)}')
@@ -208,16 +194,6 @@ class PeaksSolverMinTargets(PeaksSolverBase):
                             .value_counts(sort=False)
                             .groupby(level='index', sort=False)
                             .max())
-
-        # reduced_word_matrix.apply(pd.Series.value_counts, sort=True, axis=1).max(axis=1)
-        # np.unique(reduced_word_matrix.applymap(lambda x: RESULT_GROUPS[x]).to_numpy(), return_counts=True)
-        # pd.melt(reduced_word_matrix, var_name='answer', value_name='hint').groupby('answer')['hint'].apply(
-        #     np.unique, return_counts=True)
-        #
-        # import time
-        # start_time = time.time()
-        #
-        # print(time.time() - start_time)
 
         return worst_case_words.idxmin()
 
