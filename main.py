@@ -207,16 +207,20 @@ def main():
 
 
 if __name__ == '__main__':
-    # profiler = cProfile.Profile(subcalls=False, builtins=False)
-    # profiler.enable()
+    TEST = False
+    if TEST:
+        profiler = cProfile.Profile(subcalls=False, builtins=False)
+        profiler.enable()
 
     solver = PeaksSolverBase(verbose=True)
-    main()
-    # average_score, distribution = solver.test()
+    if TEST:
+        average_score, distribution = solver.test()
 
-    # profiler.disable()
-    # stats = pstats.Stats(profiler).sort_stats('cumtime')
-    # stats.print_stats('WordlePeaksSolver.main.py', 20)
-    #
-    # print(f"The average score for PeaksSolverMinTargets is {average_score:.4f}")
-    # print(distribution)
+        profiler.disable()
+        stats = pstats.Stats(profiler).sort_stats('cumtime')
+        stats.print_stats('WordlePeaksSolver.main.py', 20)
+
+        print(f"The average score for PeaksSolverMinTargets is {average_score:.4f}")
+        print(distribution)
+    else:
+        main()
