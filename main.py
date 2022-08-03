@@ -7,34 +7,32 @@ from itertools import product
 import numpy as np
 import pandas as pd
 
-LETTERS = [chr(x + ord('a')) for x in range(26)]
 BEFORE = 'b'
 AFTER = 'a'
 CORRECT = 'c'
-RESULT_GROUPS = {''.join(option): i for option, i in zip(product('abc', repeat=5), range(3 ** 5))}
 
 PEAKS_URL = 'https://vegeta897.github.io/wordle-peaks'
 
 
 class PeaksSolverBase:
-    def __init__(self, limit=None):
+    def __init__(self, limit=None, *, verbose=False):
+
+        self.verbose = verbose
 
         with open('targets_dictionary.json', 'r', encoding='utf-8') as infile:
-            self.target_words_list = json.load(infile)[:limit]
+            self.target_words = np.array(json.load(infile)[:limit], dtype='U5')
 
         with open('full_dictionary.json', 'r', encoding='utf-8') as infile:
-            self.all_words_list = json.load(infile)
-
-        self.target_words = pd.Series(self.target_words_list)
-        self.all_words = pd.Series(self.all_words_list)
+            self.all_words = np.array(json.load(infile), dtype='U5')
 
         self.letter_ranges = None
 
         self.word_matrix = self.create_word_matrix()
 
         self.update_ranges()
-        self.start_word, _ = self.get_best_word()
-        print("Finished init")
+        self.start_word, self.start_info = self.get_best_word()
+        if verbose:
+            print("Finished init")
 
     def create_word_matrix(self):
         return None
@@ -48,35 +46,46 @@ class PeaksSolverBase:
               "",
               "Input 'quit' to end.\n", sep='\n')
 
-        best_word, info = self.get_best_word()
+        best_word, info = self.start_word, self.start_info
         while (hints := self.get_clean_input(best_word, info)) != 'quit':
             self.update_ranges(best_word, hints)
             best_word, info = self.get_best_word()
             if info['only_word']:
                 print(f"The answer is {best_word}!\n")
                 self.update_ranges()
-                best_word, info = self.get_best_word()
+                best_word, info = self.start_word, self.start_info
+
+    def test_word(self, answer=None):
+        verbose = False
+        if answer is None:
+            verbose = True
+            answer = input('The final answer was: ')
+
+        guesses = 1
+        best_word = self.start_word
+        self.update_ranges()
+        while best_word != answer:
+            if verbose:
+                print(f'Guess {guesses}: {best_word}')
+            hints = self.simulate_hints(best_word, answer)
+            self.update_ranges(best_word, hints)
+            best_word, _ = self.get_best_word()
+            guesses += 1
+        if verbose:
+            print(f'The answer is: {best_word}')
+        return guesses
 
     def test(self):
-        results = pd.Series(None, index=self.target_words_list, dtype='Int64')
-        for i, answer in enumerate(self.target_words_list):
-            guesses = 1
-            best_word = self.start_word
-            self.update_ranges()
-            while best_word != answer:
-                hints = self.simulate_hints(best_word, answer)
-                self.update_ranges(best_word, hints)
-                best_word, _ = self.get_best_word()
-                guesses += 1
-            results[answer] = guesses
+        results = pd.Series(None, index=self.target_words, dtype='Int64')
+        for i, answer in enumerate(self.target_words):
+            results[answer] = self.test_word(answer)
 
-            if re.fullmatch(r'0b10*', bin(i)):
-                print(f'Tested {i:>5}/{len(self.target_words_list)}')
+            if self.verbose and (re.fullmatch(r'0b10*', bin(i)) or i == len(self.target_words)):
+                print(f'Tested {i:>5}/{len(self.target_words)}')
 
         average_score = results.mean()
         distribution = results.value_counts().sort_index()
-        print(f"The average score for {type(self).__name__} is {average_score:.4f}")
-        print(distribution)
+        return average_score, distribution
 
     @staticmethod
     def get_clean_input(best_word, info):
@@ -91,15 +100,7 @@ class PeaksSolverBase:
         return user_input
 
     @staticmethod
-    def range_to_regex(ranges):
-        pattern = ''
-        for start, end in ranges:
-            letters = ''.join(LETTERS[slice(start, end + 1)])
-            pattern += f'[{letters}]'
-        return re.compile(pattern)
-
-    @staticmethod
-    def simulate_hints(guess, answer):
+    def simulate_hints(guess: str, answer: str):
         split_guess = np.array([guess]).view('U1').reshape((1, -1))
         split_answer = np.array([answer]).view('U1').reshape((1, -1))
 
@@ -108,39 +109,38 @@ class PeaksSolverBase:
         hints_temp[split_guess == split_answer] = CORRECT
         hints_temp[split_guess > split_answer] = AFTER
 
-        return hints_temp.view('U5').reshape((-1))
+        return hints_temp.view('U5').reshape((-1))[0]
 
     def update_ranges(self, word=None, hints=None):
         if word is None:
-            self.letter_ranges = [(0, 25)] * 5
+            self.letter_ranges = np.array([
+                ['a'] * 5,
+                ['z'] * 5
+            ]).view('U1').reshape((2, 5))
         else:
-            # ranges = np.array(['a', 'z'] * 5).view('U1').reshape((5, 2))
-            # ranges[0, 0] = (ranges[0, 0].view('int') + 1).view('U1')
+            split_word = np.array([word]).view('U1')
+            split_hints = np.array([hints]).view('U1')
 
-            hints = list(hints)
-            letters = [ord(c) - ord('a') for c in word]
-            for i in range(5):
-                hint, letter = hints[i], letters[i]
-                start, end = self.letter_ranges[i]
-                if hint == BEFORE:
-                    start = letter + 1
-                elif hint == AFTER:
-                    end = letter - 1
-                elif hint == CORRECT:
-                    end = start = letter
-                else:
-                    raise ValueError(f"Hint = '{hint}'????")
-                self.letter_ranges[i] = start, end
+            self.letter_ranges[0, split_hints == BEFORE] = (split_word[split_hints == BEFORE]
+                                                            .view('int') + 1).view('U1')
+            self.letter_ranges[:, split_hints == CORRECT] = split_word[split_hints == CORRECT]
+            self.letter_ranges[1, split_hints == AFTER] = (split_word[split_hints == AFTER]
+                                                           .view('int') - 1).view('U1')
 
-    def target_words_left(self, pattern):
-        return self.target_words[self.target_words.str.fullmatch(pattern)].reset_index(drop=True)
+    def target_words_left(self):
+        split_guesses = self.target_words.view('U1').reshape((len(self.target_words), -1))
+        mask = np.logical_and((self.letter_ranges[0] <= split_guesses).all(axis=1),
+                              (split_guesses <= self.letter_ranges[1]).all(axis=1))
+        return self.target_words[mask]
 
-    def words_left(self, pattern):
-        return self.all_words[self.all_words.str.fullmatch(pattern)].reset_index(drop=True)
+    def words_left(self):
+        split_guesses = self.all_words.view('U1').reshape((len(self.all_words), -1))
+        mask = np.logical_and((self.letter_ranges[0] <= split_guesses).all(axis=1),
+                              (split_guesses <= self.letter_ranges[1]).all(axis=1))
+        return self.all_words[mask]
 
     def get_best_word(self):
-        word_pattern = self.range_to_regex(self.letter_ranges)
-        available_targets = self.target_words_left(word_pattern)
+        available_targets = self.target_words_left()
         info_dict = {
             'only_word': True,
             'words_left': -1,
@@ -149,13 +149,13 @@ class PeaksSolverBase:
         if len(available_targets) == 1:
             return available_targets[0], info_dict
 
-        available_words = self.words_left(word_pattern)
+        available_words = self.words_left()
         info_dict['only_word'] = False
         info_dict['words_left'] = len(available_words)
-        best_word = self._choose_best_word(word_pattern, available_words, available_targets)
+        best_word = self._choose_best_word(available_words, available_targets)
         return best_word, info_dict
 
-    def _choose_best_word(self, word_pattern, available_words, available_targets):
+    def _choose_best_word(self, available_words, available_targets):
         return available_targets[0]
 
 
@@ -165,10 +165,10 @@ class PeaksSolverMinTargets(PeaksSolverBase):
     """
 
     def create_word_matrix(self):
-        split_guesses = np.array(self.all_words_list).view('U1').reshape((len(self.all_words_list), -1))
+        split_guesses = self.all_words.view('U1').reshape((len(self.all_words), -1))
 
         hints_dict = {}
-        for i, answer in enumerate(self.target_words_list):
+        for i, answer in enumerate(self.target_words):
             split_answer = np.array([answer]).view('U1')
 
             hints_temp = np.empty_like(split_guesses)
@@ -178,15 +178,15 @@ class PeaksSolverMinTargets(PeaksSolverBase):
 
             hints_dict[answer] = hints_temp.view('U5').reshape((-1))
 
-            if re.fullmatch(r'0b10*', bin(i)):
-                print(f'Matrix column {i:>5}/{len(self.target_words_list)}')
+            if self.verbose and (re.fullmatch(r'0b10*', bin(i)) or i == len(self.target_words)):
+                print(f'Matrix column {i:>5}/{len(self.target_words)}')
 
-        return pd.DataFrame(hints_dict, index=self.all_words_list)
+        return pd.DataFrame(hints_dict, index=self.all_words)
 
     def simulate_hints(self, guess, answer):
         return self.word_matrix.loc[guess, answer]
 
-    def _choose_best_word(self, word_pattern, available_words, available_targets):
+    def _choose_best_word(self, available_words, available_targets):
         reduced_word_matrix = self.word_matrix.loc[available_words, available_targets]
         worst_case_words = (pd.melt(reduced_word_matrix, var_name='answer', value_name='hint', ignore_index=False)
                             .drop('answer', axis=1)
@@ -198,13 +198,25 @@ class PeaksSolverMinTargets(PeaksSolverBase):
         return worst_case_words.idxmin()
 
 
+def main():
+    question = ("Type 'play' to have suggestions given to you or 'test' to see how the solver would solve a word.\n"
+                "Type 'quit' to end the program: ")
+    while (choice := input(question).lower()) not in ['q', 'quit']:
+        {'play': solver.play,
+         'test': solver.test_word}[choice]()
+
+
 if __name__ == '__main__':
-    profiler = cProfile.Profile(subcalls=False, builtins=False)
-    profiler.enable()
+    # profiler = cProfile.Profile(subcalls=False, builtins=False)
+    # profiler.enable()
 
-    solver = PeaksSolverMinTargets()
-    solver.test()
+    solver = PeaksSolverBase(verbose=True)
+    main()
+    # average_score, distribution = solver.test()
 
-    profiler.disable()
-    stats = pstats.Stats(profiler).sort_stats('cumtime')
-    stats.print_stats(20)
+    # profiler.disable()
+    # stats = pstats.Stats(profiler).sort_stats('cumtime')
+    # stats.print_stats('WordlePeaksSolver.main.py', 20)
+    #
+    # print(f"The average score for PeaksSolverMinTargets is {average_score:.4f}")
+    # print(distribution)
