@@ -312,36 +312,58 @@ class WordleSolverBase(SolverBase):
         return hints_temp.view('U5')[0]
 
     def reset_state(self):
-        self.game_state = np.ones((26, 5), dtype=bool)
+        self.game_state = pd.DataFrame(True, index=list(string.ascii_lowercase), columns=range(5))
+        self.game_state['min'] = 0
+        self.game_state['max'] = 5
 
     def update_state(self, word, hints):
-        split_word = np.array([word]).view('U1').view('int') - ord('a')
+        split_word = np.array([word]).view('U1')
         split_hints = np.array([hints]).view('U1')
 
-        self.game_state[split_word[split_hints == self.INCORRECT]] = False
+        split_combo = pd.DataFrame(zip(word, hints), columns=['letter', 'hint'])
+        split_info = (split_combo
+                      .value_counts(sort=False)
+                      .reset_index(level='hint')
+                      .pivot(columns='hint')
+                      .fillna(0)
+                      .astype('int64')
+                      .droplevel(level=0, axis=1))
 
-        self.game_state[split_word[split_hints == self.PARTIAL],
-                        np.arange(5)[split_hints == self.PARTIAL]] = False
+        for letter, info in split_info.iterrows():
+            occurrences = info[self.CORRECT] + info[self.PARTIAL]
+            self.game_state.loc[letter, 'min'] = max(occurrences, self.game_state.loc[letter, 'min'])
+            if info[self.INCORRECT]:
+                self.game_state.loc[letter, 'max'] = occurrences
 
-        self.game_state[:, np.arange(5)[split_hints == self.CORRECT]] = False
-        self.game_state[split_word[split_hints == self.CORRECT],
-                        np.arange(5)[split_hints == self.CORRECT]] = True
+        for position, info in split_combo.iterrows():
+            if info.hint == self.INCORRECT:
+                if self.game_state.loc[info.letter, 'max'] == 0:
+                    self.game_state.loc[info.letter,
+                                        np.arange(5)] = False
+            elif info.hint == self.PARTIAL:
+                self.game_state.loc[info.letter, position] = False
+            elif info.hint == self.CORRECT:
+                self.game_state.loc[:, position] = False
+                self.game_state.loc[info.letter,
+                                    position] = True
+            else:
+                raise ValueError(f"How did we get this hint?: '{position.hint}'.")
 
     def target_words_left(self):
-        split_words = self.target_words.view('U1').reshape((len(self.target_words), -1)).view('int') - ord('a')
+        # split_words = self.target_words.view('U1').reshape((len(self.target_words), -1)).view('int') - ord('a')
+        #
+        # mask = self.game_state[split_words,
+        #                        np.arange(5)].all(axis=1)
 
-        mask = self.game_state[split_words,
-                               np.arange(5)].all(axis=1)
-
-        return self.target_words[mask]
+        return self.target_words  # [mask]
 
     def words_left(self):
-        split_words = self.all_words.view('U1').reshape((len(self.all_words), -1)).view('int') - ord('a')
+        # split_words = self.all_words.view('U1').reshape((len(self.all_words), -1)).view('int') - ord('a')
+        #
+        # mask = self.game_state[split_words,
+        #                        np.arange(5)].all(axis=1)
 
-        mask = self.game_state[split_words,
-                               np.arange(5)].all(axis=1)
-
-        return self.all_words[mask]
+        return self.all_words  # [mask]
 
 
 def main():
