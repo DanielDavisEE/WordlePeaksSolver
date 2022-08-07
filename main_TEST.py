@@ -2,37 +2,50 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from main import PeaksSolverBase, PeaksSolverMinTargets
+from main import PeaksSolverBase, PeaksSolverMinTargets, WordleSolverBase
 
 
 class MyTestCase(unittest.TestCase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.solver_base = PeaksSolverBase(limit=20)
-        self.solver_targets = PeaksSolverMinTargets(limit=20)
+        self.peaks_solver_base = PeaksSolverBase(limit=20)
+        self.peaks_solver_targets = PeaksSolverMinTargets(limit=20)
+        self.wordle_solver_base = WordleSolverBase(limit=20)
+
+    def test_simulate_hints(self):
+        hint = self.wordle_solver_base.simulate_hints('climb', 'frill')
+        self.assertEqual(hint, 'bygbb')
+        hint = self.wordle_solver_base.simulate_hints('rfete', 'greet')
+        self.assertEqual(hint, 'ybgyy')
+        hint = self.wordle_solver_base.simulate_hints('rfete', 'gremt')
+        self.assertEqual(hint, 'ybgyb')
+        hint = self.wordle_solver_base.simulate_hints('paper', 'empty')
+        self.assertEqual(hint, 'bbgyb')
+        hint = self.wordle_solver_base.simulate_hints('ppaer', 'empty')
+        self.assertEqual(hint, 'ybbyb')
 
     def test_update_ranges_init(self):
-        self.solver_base.update_ranges()
+        self.peaks_solver_base.reset_state()
         true_letter_ranges = np.array([
             ['a'] * 5,
             ['z'] * 5
         ])
-        np.testing.assert_array_equal(self.solver_base.letter_ranges, true_letter_ranges)
+        np.testing.assert_array_equal(self.peaks_solver_base.game_state, true_letter_ranges)
 
     def test_update_ranges(self):
-        self.solver_base.update_ranges('geuss', 'bcaba')
+        self.peaks_solver_base.update_state('guess', 'ygbyb')
         true_letter_ranges = np.array([
-            ['h', 'e', 'a', 't', 'a'],
-            ['z', 'e', 't', 'z', 'r']
+            ['h', 'u', 'a', 't', 'a'],
+            ['z', 'u', 'd', 'z', 'r']
         ])
-        np.testing.assert_array_equal(self.solver_base.letter_ranges, true_letter_ranges)
+        np.testing.assert_array_equal(self.peaks_solver_base.game_state, true_letter_ranges)
 
     def test_words_left(self):
-        self.solver_base.letter_ranges = np.array([
+        self.peaks_solver_base.game_state = np.array([
             ['b'] * 5,
             ['g'] * 5
         ], dtype='U1')
-        words_left = self.solver_base.words_left()
+        words_left = self.peaks_solver_base.words_left()
         true_words_left = pd.Series([
             'ceded',
             'ebbed',
@@ -43,11 +56,11 @@ class MyTestCase(unittest.TestCase):
         np.testing.assert_array_equal(words_left, true_words_left)
 
     def test_target_words_left(self):
-        self.solver_base.letter_ranges = np.array([
+        self.peaks_solver_base.game_state = np.array([
             ['a'] * 5,
             ['s'] * 5
         ], dtype='U1')
-        words_left = self.solver_base.target_words_left()
+        words_left = self.peaks_solver_base.target_words_left()
         true_words_left = pd.Series([
             'charm',
             'skill',
