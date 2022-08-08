@@ -11,6 +11,8 @@ import pandas as pd
 
 class SolverBase(abc.ABC):
     source_folder = None
+    start_word, start_info = None, None
+    game_state = None
 
     def __init__(self, /, limit=None, verbose=False):
 
@@ -21,9 +23,6 @@ class SolverBase(abc.ABC):
 
         with open(os.path.join(self.source_folder, 'full_dictionary.txt'), 'r', encoding='utf-8') as infile:
             self.all_words = np.array(infile.read().splitlines(), dtype='U5')
-
-        self.start_word, self.start_info = None, None
-        self.game_state = None
 
         self.init()
 
@@ -267,6 +266,20 @@ class WordleSolverBase(SolverBase):
 
     HINT_TYPES = (INCORRECT, PARTIAL, CORRECT)
 
+    letter_counts = None
+
+    def init(self):
+        split_words = self.target_words.view('U1').reshape((len(self.target_words), -1))
+        self.letter_counts = (pd.DataFrame(split_words, index=self.target_words)
+                              .melt(value_name='letter', ignore_index=False)
+                              .drop('variable', axis=1)
+                              .reset_index()
+                              .groupby(by='index', sort=False)
+                              .value_counts(sort=False)
+                              .reset_index()
+                              .rename(columns={0: 'counts', 'index': 'word'}))
+        super().init()
+
     def play(self):
         print("Hints:",
               f"{self.INCORRECT} = incorrect (black)",
@@ -350,20 +363,34 @@ class WordleSolverBase(SolverBase):
                 raise ValueError(f"How did we get this hint?: '{position.hint}'.")
 
     def target_words_left(self):
-        # split_words = self.target_words.view('U1').reshape((len(self.target_words), -1)).view('int') - ord('a')
-        #
-        # mask = self.game_state[split_words,
-        #                        np.arange(5)].all(axis=1)
+        min_count, max_count = (self.game_state.loc[self.letter_counts.letter, 'min'],
+                                self.game_state.loc[self.letter_counts.letter, 'max'])
+        in_range = np.logical_and(min_count.to_numpy() <= self.letter_counts.counts.to_numpy(),
+                                  self.letter_counts.counts.to_numpy() <= max_count.to_numpy())
+        mask1 = (pd.DataFrame({'word': self.letter_counts.word.to_numpy(),
+                               'inRange': in_range})
+                 .groupby(by='word')
+                 .all()).inRange
 
-        return self.target_words  # [mask]
+        split_words = self.target_words[mask1].view('U1').reshape((len(self.target_words[mask1]), -1))
+        mask2 = self.game_state[split_words, np.arange(5)].all(axis=1)
+
+        return self.target_words.loc[mask1, :].loc[mask2, :]
 
     def words_left(self):
-        # split_words = self.all_words.view('U1').reshape((len(self.all_words), -1)).view('int') - ord('a')
-        #
-        # mask = self.game_state[split_words,
-        #                        np.arange(5)].all(axis=1)
+        min_count, max_count = (self.game_state.loc[self.letter_counts.letter, 'min'],
+                                self.game_state.loc[self.letter_counts.letter, 'max'])
+        in_range = np.logical_and(min_count.to_numpy() <= self.letter_counts.counts.to_numpy(),
+                                  self.letter_counts.counts.to_numpy() <= max_count.to_numpy())
+        mask1 = (pd.DataFrame({'word': self.letter_counts.word.to_numpy(),
+                               'inRange': in_range})
+                 .groupby(by='word', squeeze=True)
+                 .all()).inRange
 
-        return self.all_words  # [mask]
+        split_words = self.all_words[mask1].view('U1').reshape((len(self.all_words[mask1]), -1))
+        mask2 = self.game_state[split_words, np.arange(5)].all(axis=1)
+
+        return self.all_words[mask1][mask2]
 
 
 def main():

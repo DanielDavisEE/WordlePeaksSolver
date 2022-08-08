@@ -24,7 +24,7 @@ class MyTestCase(unittest.TestCase):
         hint = self.wordle_solver_base.simulate_hints('ppaer', 'empty')
         self.assertEqual(hint, 'ybbyb')
 
-    def test_update_ranges_init(self):
+    def test_reset_state(self):
         self.peaks_solver_base.reset_state()
         true_letter_ranges = np.array([
             ['a'] * 5,
@@ -32,7 +32,7 @@ class MyTestCase(unittest.TestCase):
         ])
         np.testing.assert_array_equal(self.peaks_solver_base.game_state, true_letter_ranges)
 
-    def test_update_ranges(self):
+    def test_update_state(self):
         self.peaks_solver_base.update_state('guess', 'ygbyb')
         true_letter_ranges = np.array([
             ['h', 'u', 'a', 't', 'a'],
