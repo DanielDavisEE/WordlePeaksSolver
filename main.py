@@ -4,6 +4,7 @@ import abc
 import string
 import pstats
 import cProfile
+import time
 
 import numpy as np
 import pandas as pd
@@ -40,7 +41,7 @@ class SolverBase(abc.ABC):
             best_word, info = self.get_best_word()
             if info['only_word']:
                 print(f"The answer is {best_word}!\n")
-                self.update_state()
+                self.reset_state()
                 best_word, info = self.start_word, self.start_info
 
     def test_word(self, answer=None):
@@ -65,7 +66,7 @@ class SolverBase(abc.ABC):
 
     def test(self):
         results = pd.Series(None, index=self.target_words, dtype='Int64')
-        for i, answer in enumerate(self.target_words):
+        for i, answer in enumerate(self.target_words, start=1):
             results[answer] = self.test_word(answer)
 
             if self.verbose and (re.fullmatch(r'0b10*', bin(i)) or i == len(self.target_words)):
@@ -144,14 +145,33 @@ class SolverMinTargets(abc.ABC):
 
     def _choose_best_word(self, available_words, available_targets):
         reduced_word_matrix = self.word_matrix.loc[available_words, available_targets]
-        worst_case_words = (pd.melt(reduced_word_matrix, var_name='answer', value_name='hint', ignore_index=False)
-                            .drop('answer', axis=1)
-                            .reset_index()
-                            .value_counts(sort=False)
-                            .groupby(level='index', sort=False)
-                            .max())
+        word_groups = (pd.melt(reduced_word_matrix, var_name='answer', value_name='hint', ignore_index=False)
+                       .drop('answer', axis=1)
+                       .reset_index()
+                       .value_counts(sort=False))
+        max_group = (word_groups
+                     .groupby(level='index', sort=False)
+                     .max())
+        best_words = max_group.index[max_group == max_group.min()]
 
-        return worst_case_words.idxmin()
+        best_words_max_groups = pd.DataFrame(
+            word_groups[best_words]
+                .groupby(level='index', sort=False)
+                .nlargest(n=5)
+                .droplevel([1, 2], axis=0))
+        best_words_max_groups.rename({best_words_max_groups.columns[0]: 'counts'}, axis=1, inplace=True)
+
+        best_words_max_groups['rank'] = (best_words_max_groups
+                                         .groupby(by='index')
+                                         .rank('first', ascending=False))
+
+        best_words_max_groups = (best_words_max_groups
+            .pivot(columns='rank', values='counts')
+            .sort_values(
+            by=[float(x) for x in range(1, int(best_words_max_groups['rank'].max()) + 1)],
+            ascending=True))
+
+        return best_words_max_groups.index[0]
 
 
 class PeaksSolverBase(SolverBase):
@@ -191,17 +211,25 @@ class PeaksSolverBase(SolverBase):
         self.game_state = np.array([
             ['a'] * 5,
             ['z'] * 5
-        ]).view('U1').reshape((2, 5))
+        ])
 
     def update_state(self, word, hints):
         split_word = np.array([word]).view('U1')
         split_hints = np.array([hints]).view('U1')
 
-        self.game_state[0, split_hints == self.BEFORE] = (split_word[split_hints == self.BEFORE]
-                                                          .view('int') + 1).view('U1')
-        self.game_state[:, split_hints == self.CORRECT] = split_word[split_hints == self.CORRECT]
-        self.game_state[1, split_hints == self.AFTER] = (split_word[split_hints == self.AFTER]
-                                                         .view('int') - 1).view('U1')
+        tmp = np.array([
+            ['a'] * 5,
+            ['z'] * 5
+        ])
+
+        tmp[0, split_hints == self.BEFORE] = (split_word[split_hints == self.BEFORE]
+                                              .view('int') + 1).view('U1')
+        tmp[:, split_hints == self.CORRECT] = split_word[split_hints == self.CORRECT]
+        tmp[1, split_hints == self.AFTER] = (split_word[split_hints == self.AFTER]
+                                             .view('int') - 1).view('U1')
+
+        self.game_state[0, :] = np.maximum(self.game_state.view('int')[0, :], tmp.view('int')[0, :]).view('U1')
+        self.game_state[1, :] = np.minimum(self.game_state.view('int')[1, :], tmp.view('int')[1, :]).view('U1')
 
     def target_words_left(self):
         split_guesses = self.target_words.view('U1').reshape((len(self.target_words), -1))
@@ -241,7 +269,7 @@ class PeaksSolverMinTargets(SolverMinTargets, PeaksSolverBase):
         split_guesses = self.all_words.view('U1').reshape((len(self.all_words), -1))
 
         hints_dict = {}
-        for i, answer in enumerate(self.target_words):
+        for i, answer in enumerate(self.target_words, start=1):
             split_answer = np.array([answer]).view('U1')
 
             hints_temp = np.empty_like(split_guesses)
@@ -405,12 +433,12 @@ def main():
 
 
 if __name__ == '__main__':
-    TEST = True
+    TEST = False
     if TEST:
         profiler = cProfile.Profile(subcalls=False, builtins=False)
         profiler.enable()
 
-    solver = WordleSolverBase(verbose=True)
+    solver = PeaksSolverMinTargets(verbose=True)
     if TEST:
         results = solver.test()
         average_score = results.mean()
@@ -422,6 +450,6 @@ if __name__ == '__main__':
 
         print(f"The average score for PeaksSolverMinTargets is {average_score:.4f}")
         print(distribution)
-        print(results.loc[results == distribution.index.max()].index.to_list())
+        print('Worst words:', results.loc[results == distribution.index.max()].index.to_list())
     else:
         main()
