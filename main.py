@@ -297,15 +297,14 @@ class WordleSolverBase(SolverBase):
     letter_counts = None
 
     def init(self):
-        split_words = self.target_words.view('U1').reshape((len(self.target_words), -1))
-        self.letter_counts = (pd.DataFrame(split_words, index=self.target_words)
+        split_words = self.all_words.view('U1').reshape((len(self.all_words), -1))
+        self.letter_counts = (pd.DataFrame(split_words, index=self.all_words)
                               .melt(value_name='letter', ignore_index=False)
                               .drop('variable', axis=1)
-                              .reset_index()
-                              .groupby(by='index', sort=False)
+                              .groupby(level=0, sort=False)
                               .value_counts(sort=False)
-                              .reset_index()
-                              .rename(columns={0: 'counts', 'index': 'word'}))
+                              .reset_index(level='letter')
+                              .rename(columns={0: 'counts'}, index={0: 'word'}))
         super().init()
 
     def play(self):
@@ -358,9 +357,6 @@ class WordleSolverBase(SolverBase):
         self.game_state['max'] = 5
 
     def update_state(self, word, hints):
-        split_word = np.array([word]).view('U1')
-        split_hints = np.array([hints]).view('U1')
-
         split_combo = pd.DataFrame(zip(word, hints), columns=['letter', 'hint'])
         split_info = (split_combo
                       .value_counts(sort=False)
@@ -369,6 +365,10 @@ class WordleSolverBase(SolverBase):
                       .fillna(0)
                       .astype('int64')
                       .droplevel(level=0, axis=1))
+
+        for hint in self.HINT_TYPES:
+            if hint not in split_info:
+                split_info[hint] = 0
 
         for letter, info in split_info.iterrows():
             occurrences = info[self.CORRECT] + info[self.PARTIAL]
@@ -391,34 +391,49 @@ class WordleSolverBase(SolverBase):
                 raise ValueError(f"How did we get this hint?: '{position.hint}'.")
 
     def target_words_left(self):
-        min_count, max_count = (self.game_state.loc[self.letter_counts.letter, 'min'],
-                                self.game_state.loc[self.letter_counts.letter, 'max'])
-        in_range = np.logical_and(min_count.to_numpy() <= self.letter_counts.counts.to_numpy(),
-                                  self.letter_counts.counts.to_numpy() <= max_count.to_numpy())
-        mask1 = (pd.DataFrame({'word': self.letter_counts.word.to_numpy(),
-                               'inRange': in_range})
-                 .groupby(by='word')
+        target_letter_counts = self.letter_counts.loc[self.target_words, :]
+        min_count, max_count = (self.game_state.loc[target_letter_counts.letter, 'min'],
+                                self.game_state.loc[target_letter_counts.letter, 'max'])
+        in_range = np.logical_and(min_count.to_numpy() <= target_letter_counts.counts.to_numpy(),
+                                  target_letter_counts.counts.to_numpy() <= max_count.to_numpy())
+        mask1 = (pd.DataFrame({'inRange': in_range}, index=target_letter_counts.index)
+                 .groupby(level=0, sort=False)
                  .all()).inRange
 
         split_words = self.target_words[mask1].view('U1').reshape((len(self.target_words[mask1]), -1))
-        mask2 = self.game_state[split_words, np.arange(5)].all(axis=1)
+        mask2 = self.game_state[np.arange(5)].to_numpy()[split_words.view(int) - ord('a'), np.arange(5)].all(axis=1)
 
-        return self.target_words.loc[mask1, :].loc[mask2, :]
+        return self.target_words[mask1][mask2]
 
     def words_left(self):
         min_count, max_count = (self.game_state.loc[self.letter_counts.letter, 'min'],
                                 self.game_state.loc[self.letter_counts.letter, 'max'])
         in_range = np.logical_and(min_count.to_numpy() <= self.letter_counts.counts.to_numpy(),
                                   self.letter_counts.counts.to_numpy() <= max_count.to_numpy())
-        mask1 = (pd.DataFrame({'word': self.letter_counts.word.to_numpy(),
-                               'inRange': in_range})
-                 .groupby(by='word', squeeze=True)
+        mask1 = (pd.DataFrame({'inRange': in_range}, index=self.letter_counts.index)
+                 .groupby(level=0, sort=False)
                  .all()).inRange
 
         split_words = self.all_words[mask1].view('U1').reshape((len(self.all_words[mask1]), -1))
-        mask2 = self.game_state[split_words, np.arange(5)].all(axis=1)
+        mask2 = self.game_state[np.arange(5)].to_numpy()[split_words.view(int) - ord('a'), np.arange(5)].all(axis=1)
 
         return self.all_words[mask1][mask2]
+
+
+class WordleSolverMinTargets(SolverMinTargets, WordleSolverBase):
+
+    def create_word_matrix(self):
+        hints_dict = {}
+        for i, answer in enumerate(self.target_words, start=1):
+            hints_temp = np.empty_like(self.all_words)
+            for j, guess in enumerate(self.all_words):
+                hints_temp[j] = self.simulate_hints(guess, answer)
+            hints_dict[answer] = hints_temp
+
+            if self.verbose and (re.fullmatch(r'0b10*', bin(i)) or i == len(self.target_words)):
+                print(f'Matrix column {i:>5}/{len(self.target_words)}')
+
+        return pd.DataFrame(hints_dict, index=self.all_words)
 
 
 def main():
@@ -433,12 +448,12 @@ def main():
 
 
 if __name__ == '__main__':
-    TEST = False
+    TEST = True
     if TEST:
         profiler = cProfile.Profile(subcalls=False, builtins=False)
         profiler.enable()
 
-    solver = PeaksSolverMinTargets(verbose=True)
+    solver = WordleSolverMinTargets(verbose=True)
     if TEST:
         results = solver.test()
         average_score = results.mean()
