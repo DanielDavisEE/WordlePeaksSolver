@@ -87,7 +87,7 @@ class SolverBase(abc.ABC):
         return user_input
 
     @abc.abstractmethod
-    def simulate_hints(self, guess: str, answer: str):
+    def simulate_hints(self, guesses: str | np.ndarray, answer: str):
         raise NotImplementedError
 
     @abc.abstractmethod
@@ -126,7 +126,7 @@ class SolverBase(abc.ABC):
         return available_targets[0]
 
 
-class SolverMinTargets(abc.ABC):
+class SolverMinTargets(SolverBase):
 
     def __init__(self, **kwargs):
         self.word_matrix = None
@@ -136,12 +136,21 @@ class SolverMinTargets(abc.ABC):
         self.word_matrix = self.create_word_matrix()
         super().init()
 
-    @abc.abstractmethod
     def create_word_matrix(self):
-        raise NotImplementedError
+        hints_dict = {}
+        for i, answer in enumerate(self.target_words, start=1):
+            hints_dict[answer] = self.simulate_hints(self.all_words, answer)
 
-    def simulate_hints(self, guess, answer):
-        return self.word_matrix.loc[guess, answer]
+            if self.verbose and (re.fullmatch(r'0b10*', bin(i)) or i == len(self.target_words)):
+                print(f'Matrix column {i:>5}/{len(self.target_words)}')
+
+        return pd.DataFrame(hints_dict, index=self.all_words)
+
+    def simulate_hints(self, guesses: str | np.ndarray, answer: str):
+        if self.word_matrix is None:
+            return super().simulate_hints(guesses, answer)
+        else:
+            return self.word_matrix.loc[guesses, answer]
 
     def _choose_best_word(self, available_words, available_targets):
         reduced_word_matrix = self.word_matrix.loc[available_words, available_targets]
@@ -196,16 +205,19 @@ class PeaksSolverBase(SolverBase):
 
         super().play()
 
-    def simulate_hints(self, guess: str, answer: str):
-        split_guess = np.array([guess]).view('U1').reshape((1, -1))
-        split_answer = np.array([answer]).view('U1').reshape((1, -1))
+    def simulate_hints(self, guesses: str | np.ndarray, answer: str):
+        split_guess = np.array([guesses]).view('U1').reshape((-1, 5))
+        split_answer = np.array([answer]).view('U1').reshape((-1, 5))
 
-        hints_temp = np.empty_like(split_guess)
-        hints_temp[split_guess < split_answer] = self.BEFORE
-        hints_temp[split_guess == split_answer] = self.CORRECT
-        hints_temp[split_guess > split_answer] = self.AFTER
+        hints = np.empty_like(split_guess)
+        hints[split_guess < split_answer] = self.BEFORE
+        hints[split_guess == split_answer] = self.CORRECT
+        hints[split_guess > split_answer] = self.AFTER
 
-        return hints_temp.view('U5').reshape((-1))[0]
+        hints = hints.view('U5').reshape((-1))
+        if isinstance(guesses, str):
+            hints = hints[0]
+        return hints
 
     def reset_state(self):
         self.game_state = np.array([
@@ -265,25 +277,6 @@ class PeaksSolverMinTargets(SolverMinTargets, PeaksSolverBase):
     Select the word which minimises the largest number of remaining target words
     """
 
-    def create_word_matrix(self):
-        split_guesses = self.all_words.view('U1').reshape((len(self.all_words), -1))
-
-        hints_dict = {}
-        for i, answer in enumerate(self.target_words, start=1):
-            split_answer = np.array([answer]).view('U1')
-
-            hints_temp = np.empty_like(split_guesses)
-            hints_temp[split_guesses < split_answer] = self.BEFORE
-            hints_temp[split_guesses == split_answer] = self.CORRECT
-            hints_temp[split_guesses > split_answer] = self.AFTER
-
-            hints_dict[answer] = hints_temp.view('U5').reshape((-1))
-
-            if self.verbose and (re.fullmatch(r'0b10*', bin(i)) or i == len(self.target_words)):
-                print(f'Matrix column {i:>5}/{len(self.target_words)}')
-
-        return pd.DataFrame(hints_dict, index=self.all_words)
-
 
 class WordleSolverBase(SolverBase):
     source_folder = 'wordle'
@@ -318,17 +311,14 @@ class WordleSolverBase(SolverBase):
 
         super().play()
 
-    def simulate_hints(self, guess: str, answer: str, hints_tmp=None):
+    def simulate_hints(self, guesses: str | np.ndarray, answer: str):
         GUESS_PLACEHOLDER = ','
         ANSWER_PLACEHOLDER = '.'
 
-        split_guess = np.array([guess]).view('U1').reshape(-1)
+        split_guess = np.array([guesses]).view('U1').reshape(-1)
         split_answer = np.array([answer]).view('U1').reshape(-1)
 
-        if hints_tmp is None:
-            hints_temp = np.full_like(split_guess, self.INCORRECT)
-        else:
-            hints_tmp.fill(self.INCORRECT)
+        hints_temp = np.full_like(split_guess, self.INCORRECT)
 
         # Mark correct letters as such and then remove them from the options
         correct_mask = split_guess == split_answer
@@ -425,10 +415,10 @@ class WordleSolverMinTargets(SolverMinTargets, WordleSolverBase):
     def create_word_matrix(self):
         hints_dict = {}
         for i, answer in enumerate(self.target_words, start=1):
-            hints_temp = np.empty_like(self.all_words)
+            hints = np.empty_like(self.all_words)
             for j, guess in enumerate(self.all_words):
-                hints_temp[j] = self.simulate_hints(guess, answer)
-            hints_dict[answer] = hints_temp
+                hints[j] = self.simulate_hints(guess, answer)
+            hints_dict[answer] = hints
 
             if self.verbose and (re.fullmatch(r'0b10*', bin(i)) or i == len(self.target_words)):
                 print(f'Matrix column {i:>5}/{len(self.target_words)}')
