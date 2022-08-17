@@ -1,6 +1,7 @@
 import os
 import re
 import abc
+import cmd
 import string
 import pstats
 import cProfile
@@ -44,8 +45,7 @@ class SolverBase(abc.ABC):
                 self.reset_state()
                 best_word, info = self.start_word, self.start_info
 
-    def test_word(self, answer=None):
-        verbose = False
+    def test_word(self, answer=None, *, verbose=False):
         if answer is None:
             verbose = True
             answer = input('The final answer was: ')
@@ -426,26 +426,61 @@ class WordleSolverMinTargets(SolverMinTargets, WordleSolverBase):
         return pd.DataFrame(hints_dict, index=self.all_words)
 
 
-def main():
-    question = ("Type 'play' to have suggestions given to you or 'test' to see how the solver would solve a word.\n"
-                "Type 'quit' to end the program: ")
-    while (choice := input(question).lower()) not in ['q', 'quit']:
-        try:
-            {'play': solver.play,
-             'test': solver.test_word}[choice]()
-        except KeyError:
-            continue
+class SolverCmd(cmd.Cmd):
+    intro = (
+        "Choose a solver type with 'choose_solver' and then use it with either 'play', 'test_word' or 'benchmark'.\n"
+        "Type help or ? to list commands.")
 
+    def __init__(self):
+        super().__init__()
+        self.solver = PeaksSolverBase()
 
-if __name__ == '__main__':
-    TEST = True
-    if TEST:
+    def do_choose_solver(self, arg):
+        """Choose the solver to use from the following list by providing its number as an argument:
+    1. PeaksSolverBase - A basic solver for wordle peaks
+    2. PeaksSolverMinTargets - A more advanced solver for wordle peaks
+    3. WordleSolverBase - A basic solver for wordle
+    4. WordleSolverMinTargets - A more advanced solver for wordle
+
+Usage:
+> choose_solver 2
+        """
+        self.solver = [
+            PeaksSolverBase,
+            PeaksSolverMinTargets,
+            WordleSolverBase,
+            WordleSolverMinTargets
+        ][int(arg) + 1]()
+
+    def do_print_solver(self, _):
+        print(type(self.solver).__name__)
+
+    def do_play(self, _):
+        """Use this mode to have the solver suggest words base on the hints you receive.
+
+Usage:
+> play
+        """
+        self.solver.play()
+
+    def do_test_word(self, word):
+        """Use this mode to see how the solver would have play a round.
+
+Usage:
+> test charm
+        """
+        self.solver.test_word(word, verbose=True)
+
+    def do_benchmark(self, _):
+        """Use this mode to find the performance of the solver over the whole target word list.
+
+Usage:
+> benchmark
+        """
         profiler = cProfile.Profile(subcalls=False, builtins=False)
         profiler.enable()
 
-    solver = WordleSolverMinTargets(verbose=True)
-    if TEST:
-        results = solver.test()
+        results = self.solver.test()
         average_score = results.mean()
         distribution = results.value_counts().sort_index()
 
@@ -453,8 +488,14 @@ if __name__ == '__main__':
         stats = pstats.Stats(profiler).sort_stats('cumtime')
         stats.print_stats('WordlePeaksSolver.main.py', 20)
 
-        print(f"The average score for PeaksSolverMinTargets is {average_score:.4f}")
+        print(f"The average score for {type(self.solver).__name__} is {average_score:.4f}")
         print(distribution)
         print('Worst words:', results.loc[results == distribution.index.max()].index.to_list())
-    else:
-        main()
+
+    def emptyline(self):
+        pass
+
+
+if __name__ == '__main__':
+    shell = SolverCmd()
+    shell.cmdloop()
