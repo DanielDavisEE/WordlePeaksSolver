@@ -2,7 +2,7 @@
 Wordle Peaks and Wordle Solvers
 Author: Daniel Davis
 """
-
+import functools
 import os
 import re
 import abc
@@ -115,12 +115,12 @@ class SolverBase(abc.ABC):
 
         Returns: A pandas Series of the number of guesses for each answer word
         """
-        results = pd.Series(None, index=self.available_targets, dtype='Int64')
-        for i, answer in enumerate(self.available_targets, start=1):
+        results = pd.Series(None, index=self.all_targets, dtype='Int64')
+        for i, answer in enumerate(self.all_targets, start=1):
             results[answer] = self.test_word(answer)
 
-            if self.verbose and (re.fullmatch(r'0b10*', bin(i)) or i == len(self.available_targets)):
-                print(f'Tested {i:>5}/{len(self.available_targets)}')
+            if self.verbose and (re.fullmatch(r'0b10*', bin(i)) or i == len(self.all_targets)):
+                print(f'Tested {i:>5}/{len(self.all_targets)}')
 
         return results
 
@@ -203,10 +203,7 @@ class SolverBase(abc.ABC):
 
 
 class SolverMinTargets(SolverBase, abc.ABC):
-
-    def __init__(self, **kwargs):
-        self.word_matrix = None
-        super().__init__(**kwargs)
+    word_matrix = None
 
     def init(self):
         self.word_matrix = self.create_word_matrix()
@@ -214,11 +211,11 @@ class SolverMinTargets(SolverBase, abc.ABC):
 
     def create_word_matrix(self):
         hints_dict = {}
-        for i, answer in enumerate(self.available_targets, start=1):
+        for i, answer in enumerate(self.all_targets, start=1):
             hints_dict[answer] = self.simulate_hints(self.all_words, answer)
 
-            if self.verbose and (re.fullmatch(r'0b10*', bin(i)) or i == len(self.available_targets)):
-                print(f'Matrix column {i:>5}/{len(self.available_targets)}')
+            if self.verbose and (re.fullmatch(r'0b10*', bin(i)) or i == len(self.all_targets)):
+                print(f'Matrix column {i:>5}/{len(self.all_targets)}')
 
         return pd.DataFrame(hints_dict, index=self.all_words)
 
@@ -271,10 +268,10 @@ class PeaksSolverBase(SolverBase):
 
     @property
     def available_targets(self):
-        split_guesses = self.available_targets.view('U1').reshape((len(self.available_targets), -1))
+        split_guesses = self.all_targets.view('U1').reshape((len(self.all_targets), -1))
         mask = np.logical_and((self.game_state[0] <= split_guesses).all(axis=1),
                               (split_guesses <= self.game_state[1]).all(axis=1))
-        return self.available_targets[mask]
+        return self.all_targets[mask]
 
     @property
     def available_words(self):
@@ -537,7 +534,20 @@ class SolverCmd(cmd.Cmd):
         ]
         self.solvers = {}
         self.solver = None
-        self.do_choose_solver(4)
+        self.do_choose_solver(1)
+
+    def _make_safe(f):
+        @functools.wraps(f)
+        def wrapper(self, *args, **kwargs):
+            try:
+                return f(self, *args, **kwargs)
+            except Exception:
+                print('Oops, an error occurred. Returning to the main console.\n')
+                raise
+            finally:
+                self.solver.reset_state()
+
+        return wrapper
 
     def do_choose_solver(self, arg):
         """Choose the solver to use from the following list by providing its number as an argument:
@@ -563,6 +573,7 @@ Usage:
         """
         print(type(self.solver).__name__)
 
+    @_make_safe
     def do_play(self, _):
         """Use this mode to have the solver suggest words base on the hints you receive.
 
@@ -571,6 +582,7 @@ Usage:
         """
         self.solver.play()
 
+    @_make_safe
     def do_test_word(self, word):
         """Use this mode to see how the solver would have play a round.
 
@@ -579,6 +591,7 @@ Usage:
         """
         self.solver.test_word(word, verbose=True)
 
+    @_make_safe
     def do_benchmark(self, _):
         """Use this mode to find the performance of the solver over the whole target word list.
 
@@ -622,6 +635,6 @@ def test():
 
 
 if __name__ == '__main__':
-    # shell = SolverCmd()
-    # shell.cmdloop()
-    test()
+    shell = SolverCmd()
+    shell.cmdloop()
+    # test()
