@@ -226,15 +226,21 @@ class SolverMinTargets(SolverBase, abc.ABC):
 
     def _choose_best_word(self):
         reduced_word_matrix = self.word_matrix.loc[:, self.available_targets]
+
+        # For each possible guess, count how many answers would give each set of hints
         word_groups = (pd.melt(reduced_word_matrix, var_name='answer', value_name='hint', ignore_index=False)
                        .drop('answer', axis=1)
+                       .query(f'hint != "{self.CORRECT * 5}"')
                        .reset_index()
                        .value_counts(sort=False))
+
+        # Get the size of the largest hint group for each guess, and find the words which minimise this
         max_group = (word_groups
                      .groupby(level='index', sort=False)
                      .max())
         best_words = max_group.index[max_group == max_group.min()]
 
+        # Using only the best words from the previous step, find the sizes of their 5 largest word groups
         best_words_max_groups = pd.DataFrame(
             word_groups[best_words]
                 .groupby(level='index', sort=False)
@@ -246,12 +252,18 @@ class SolverMinTargets(SolverBase, abc.ABC):
                                          .groupby(by='index')
                                          .rank('first', ascending=False))
 
+        # Sort the best words by the sizes of their 5 largest word groups
         best_words_max_groups = (best_words_max_groups
             .pivot(columns='rank', values='counts')
+            .fillna(0)
             .sort_values(
             by=[float(x) for x in range(1, int(best_words_max_groups['rank'].max()) + 1)],
             ascending=True))
 
+        # From the words which give the best performance, try to select those which fit the hints first
+        filtered_best_words = best_words_max_groups.reindex(self.available_words).dropna().index.to_list()
+        if filtered_best_words:
+            return filtered_best_words[0]
         return best_words_max_groups.index[0]
 
 
@@ -379,7 +391,7 @@ class WordleSolverBase(SolverBase):
 
     @property
     def available_targets(self):
-        target_letter_counts = self.letter_counts.loc[self.available_targets, :]
+        target_letter_counts = self.letter_counts.loc[self.all_targets, :]
         min_count, max_count = (self.game_state.loc[target_letter_counts.letter, 'min'],
                                 self.game_state.loc[target_letter_counts.letter, 'max'])
         in_range = np.logical_and(min_count.to_numpy() <= target_letter_counts.counts.to_numpy(),
@@ -388,14 +400,14 @@ class WordleSolverBase(SolverBase):
                  .groupby(level=0, sort=False)
                  .all()).inRange
 
-        split_words = (self.available_targets[mask1]
+        split_words = (self.all_targets[mask1]
                        .view('U1')
-                       .reshape((len(self.available_targets[mask1]), -1)))
+                       .reshape((len(self.all_targets[mask1]), -1)))
         mask2 = (self.game_state[np.arange(5)]
                  .to_numpy()[split_words.view(int) - ord('a'), np.arange(5)]
                  .all(axis=1))
 
-        return self.available_targets[mask1][mask2]
+        return self.all_targets[mask1][mask2]
 
     @property
     def available_words(self):
@@ -621,7 +633,7 @@ def test():
     profiler = cProfile.Profile(subcalls=False, builtins=False)
     profiler.enable()
     solver = WordleSolverMinTargets(verbose=True)
-    results = solver.test_word('poker', verbose=True)
+    results = solver.test()
     average_score = results.mean()
     distribution = results.value_counts().sort_index()
 
@@ -635,6 +647,6 @@ def test():
 
 
 if __name__ == '__main__':
-    shell = SolverCmd()
-    shell.cmdloop()
-    # test()
+    # shell = SolverCmd()
+    # shell.cmdloop()
+    test()
