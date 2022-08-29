@@ -127,6 +127,7 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
 /WORD_LIST.txt
 /wordleunlimitedcode.js
 /SOLUTION_LIST.txt

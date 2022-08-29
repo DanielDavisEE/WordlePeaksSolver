@@ -2,15 +2,14 @@
 Wordle Peaks and Wordle Solvers
 Author: Daniel Davis
 """
-import functools
 import os
 import re
 import abc
 import cmd
-import sys
 import time
 import pstats
 import cProfile
+import functools
 
 import numpy as np
 import pandas as pd
@@ -65,31 +64,30 @@ class SolverBase(abc.ABC):
                 self.reset_state()
                 best_word, info = self.start_word, self.start_info
 
-    def test_word(self, answer: str = None, *, verbose: bool = False) -> int:
+    def test_word(self, answer: str = None, *, suppress_output: bool = False) -> int:
         """A method to simulate playing a particular answer.
 
         Args:
             answer: The answer to try and find. If None is supplied, user input will be
                 requested instead
-            verbose: Whether to print information on the steps taken for a user
+            suppress_output: Whether to print information on the steps taken for a user
 
         Returns: An int representing the steps taken to find the answer
         """
         if answer is None:
-            verbose = True
             answer = input('The final answer was: ')
 
         guesses = 1
         best_word = self.start_word
         self.reset_state()
         while best_word != answer:
-            if verbose:
+            if not suppress_output:
                 print(f'Guess {guesses}: {best_word}')
             hints = self.simulate_hints(best_word, answer)
             self.update_state(best_word, hints)
             best_word, _ = self.get_best_word()
             guesses += 1
-        if verbose:
+        if not suppress_output:
             print(f'The answer is: {best_word}')
         return guesses
 
@@ -101,7 +99,7 @@ class SolverBase(abc.ABC):
         results = pd.Series(None, index=self.all_targets, dtype='Int64')
         start_time = time.time()
         for i, answer in enumerate(self.all_targets, start=1):
-            results[answer] = self.test_word(answer)
+            results[answer] = self.test_word(answer, suppress_output=True)
 
             if self.verbose and (re.fullmatch(r'0b10*', bin(i)) or i == len(self.all_targets)):
                 print(f'Tested {i:>5}/{len(self.all_targets)} ({time.time() - start_time:>6.2f} s)')
@@ -110,7 +108,7 @@ class SolverBase(abc.ABC):
 
     def get_clean_input(self, best_word: str, info: dict) -> str:
         """Gets input from user and ensures it is a valid format
-        
+
         Args:
             best_word: The word for the solver to suggest to the user
             info: A dictionary of information about the game state
@@ -134,7 +132,7 @@ class SolverBase(abc.ABC):
     @abc.abstractmethod
     def simulate_hints(self, guesses: str | np.ndarray, answer: str) -> str | np.ndarray:
         """Simulate the hints for a guess or guesses against a particular answer.
-        
+
         Args:
             guesses: The guess(es) to find hint(s) for
             answer: The answer to check against
@@ -152,7 +150,7 @@ class SolverBase(abc.ABC):
     @abc.abstractmethod
     def update_state(self, guess: str, hints: str) -> None:
         """Iterate the solver's game state based on a guess and its corresponding hints
-        
+
         Args:
             guess: The most recent guess made in a game
             hints: The hints obtained from the guess
@@ -161,7 +159,7 @@ class SolverBase(abc.ABC):
 
     def get_best_word(self) -> tuple[str, dict]:
         """Based on the current game state, find the best next guess
-        
+
         Returns: The solver's recommended next guess and a dictionary of information
             about the guess (the number of remaining guesses and answers)
         """
@@ -180,13 +178,19 @@ class SolverBase(abc.ABC):
 
     def _choose_best_word(self):
         """The overwrite-able method for determining the next best guess
-        
+
         Returns: The solver's recommended next guess
         """
         return self.available_targets[0]
 
 
-class SolverMinTargets(SolverBase, abc.ABC):
+class SolverHintGroups(SolverBase, abc.ABC):
+    """A more advanced solving method which aims to minimise the worst case outcome at each step
+
+    This class first precomputes a matrix of guesses to answers and the hints for each pair. It
+    then uses this to group answers by hint. Subclasses can then choose a metric for deciding
+    the optimal hint based on this.
+    """
     word_matrix = None
 
     def init(self):
@@ -194,6 +198,11 @@ class SolverMinTargets(SolverBase, abc.ABC):
         super().init()
 
     def create_word_matrix(self):
+        """Precomputes a matrix of guesses to answers and the hints for each pair
+
+        Returns:
+            pd.DataFrame: All possible outcomes for every guess
+        """
         hints_dict = {}
         for i, answer in enumerate(self.all_words, start=1):
             hints_dict[answer] = self.simulate_hints(self.all_words, answer)
@@ -215,25 +224,42 @@ class SolverMinTargets(SolverBase, abc.ABC):
         previous_targets = self.word_matrix.loc[guess, self.available_words]
         self.available_words = previous_targets[previous_targets == hints].index.to_numpy()
 
-    def _choose_best_word(self):
+    def get_hint_groups(self):
         reduced_word_matrix = self.word_matrix.loc[:, self.available_targets]
 
         # For each possible guess, count how many answers would give each set of hints
-        word_groups = (pd.melt(reduced_word_matrix, var_name='answer', value_name='hint', ignore_index=False)
+        hint_groups = (pd.melt(reduced_word_matrix, var_name='answer', value_name='hint', ignore_index=False)
                        .drop('answer', axis=1)
                        .query(f'hint != "{self.CORRECT * 5}"')
                        .reset_index()
                        .value_counts(sort=False))
+        return hint_groups
+
+
+class SolverMaxGroup(SolverHintGroups, abc.ABC):
+    """A more advanced solving method which aims to minimise the worst case outcome at each step
+
+    This class first precomputes a matrix of guesses to answers and the hints for each pair. It
+    then uses this to group answers by hint, and chooses the guess that gives the smallest group
+    of answers in the worst case i.e. it sorts guesses in ascending order of largest answer
+    group, and takes the top guess as the best one.
+    This is a strategy to always avoid poor choices, and choose the guess that will guarantee
+    the least bad outcome.
+    """
+
+    def _choose_best_word(self):
+        hint_groups = self.get_hint_groups()
 
         # Get the size of the largest hint group for each guess, and find the words which minimise this
-        max_group = (word_groups
+        # This is used to filter the large matrix to a more manageable size for the next step.
+        max_group = (hint_groups
                      .groupby(level='index', sort=False)
                      .max())
         best_words = max_group.index[max_group == max_group.min()]
 
         # Using only the best words from the previous step, find the sizes of their 5 largest word groups
         best_words_max_groups = pd.DataFrame(
-            word_groups[best_words]
+            hint_groups[best_words]
                 .sort_values()
                 .droplevel([1], axis=0))
         best_words_max_groups.rename({best_words_max_groups.columns[0]: 'counts'}, axis=1, inplace=True)
@@ -257,22 +283,6 @@ class SolverMinTargets(SolverBase, abc.ABC):
         return best_words_max_groups.index[0]
 
 
-def benchmark(solver_type):
-    with cProfile.Profile(subcalls=False, builtins=False) as profiler:
-        solver = solver_type(verbose=True)
-        results = solver.benchmark()
-
-    average_score = results.mean()
-    distribution = results.value_counts().sort_index()
-
-    stats = pstats.Stats(profiler).sort_stats('cumtime')
-    stats.print_stats('WordlePeaksSolver.main.py', 20)
-
-    print(f"The average score for {type(solver).__name__} is {average_score:.4f}")
-    print(distribution)
-    print('Worst words:', results.loc[results == distribution.index.max()].index.to_list())
-
-
 # noinspection SpellCheckingInspection
 class SolverCmd(cmd.Cmd):
     """
@@ -286,15 +296,7 @@ class SolverCmd(cmd.Cmd):
     def __init__(self):
         super().__init__()
 
-        self.solver_types = []
-        try:
-            self.solver_types += list(get_solvers())
-        except NameError:
-            pass
-
-        for module_name, module in sys.modules.items():
-            if 'solvers' in module_name and 'get_solvers' in dir(module):
-                self.solver_types += list(getattr(module, 'get_solvers')())
+        self.solver_types = get_solvers()
 
         self.solvers = {}
         self.solver = None
@@ -363,14 +365,10 @@ Usage:
 > benchmark
         """
 
-        with cProfile.Profile(subcalls=False, builtins=False) as profiler:
-            results = self.solver.benchmark()
+        results = self.solver.benchmark()
 
         average_score = results.mean()
         distribution = results.value_counts().sort_index()
-
-        stats = pstats.Stats(profiler).sort_stats('cumtime')
-        stats.print_stats('WordlePeaksSolver.main.py', 20)
 
         print(f"The average score for {type(self.solver).__name__} is {average_score:.4f}")
         print(distribution)
@@ -380,7 +378,18 @@ Usage:
         pass
 
 
+def get_solvers():
+    """Placeholder to suppress pycharm warning"""
+    return ()
+
+
 if __name__ == '__main__':
-    # shell = SolverCmd()
-    # shell.cmdloop()
-    benchmark()
+    from peaks_solvers import PeaksSolverBase, PeaksSolverMinTargets
+    from wordle_solvers import WordleSolverBase, WordleSolverMinTargets
+
+    with cProfile.Profile(subcalls=False, builtins=False) as profiler:
+        solver = PeaksSolverMinTargets(verbose=True)
+        solver.benchmark()
+
+    stats = pstats.Stats(profiler).sort_stats('cumtime')
+    stats.print_stats('WordlePeaksSolver.main.py', 20)

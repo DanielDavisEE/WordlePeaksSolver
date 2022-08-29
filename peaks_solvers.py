@@ -2,20 +2,9 @@
 Wordle Peaks and Wordle Solvers
 Author: Daniel Davis
 """
-import functools
-import os
-import re
-import abc
-import cmd
-import string
-import pstats
-import cProfile
-import time
-
 import numpy as np
-import pandas as pd
 
-from solver_utils import SolverBase, SolverMinTargets, SolverCmd
+from solver_utils import SolverBase, SolverMaxGroup, SolverCmd
 
 
 class PeaksSolverBase(SolverBase):
@@ -95,14 +84,14 @@ class PeaksSolverBase(SolverBase):
         return best_word, info_dict
 
 
-class PeaksSolverMinTargets(SolverMinTargets, PeaksSolverBase):
+class PeaksSolverMaxGroup(SolverMaxGroup, PeaksSolverBase):
     """
     Select the word which minimises the largest number of remaining target words
     """
 
 
 def get_solvers():
-    return PeaksSolverBase, PeaksSolverMinTargets
+    return PeaksSolverBase, PeaksSolverMaxGroup
 
 
 if __name__ == '__main__':
